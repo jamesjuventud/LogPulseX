@@ -93,7 +93,7 @@ inline void append_escaped_json(std::string& out, std::string_view text) {
 // untrusted input the application chose to log.
 class PatternFormatter final : public IFormatter {
 public:
-    explicit PatternFormatter(std::string pattern = "{time} [{level}] [pid:{pid}] [tid:{thread}] {logger}: {message}")
+    explicit PatternFormatter(std::string pattern = "{time} [{level}] [pid:{pid}] [tid:{thread}] [ntid:{native_tid}] {logger}: {message}")
         : pattern_(std::move(pattern)) {}
 
     std::string format(const LogRecord& record) const override {
@@ -132,6 +132,8 @@ private:
             std::ostringstream ss;
             ss << r.thread_id;
             out += ss.str();
+        } else if (token == "native_tid") {
+            out += std::to_string(r.native_thread_id);
         } else if (token == "pid") {
             out += std::to_string(r.process_id);
         } else if (token == "file") {
@@ -204,7 +206,9 @@ public:
             tid_ss << record.thread_id;
             detail::append_escaped_json(out, tid_ss.str());
         }
-        out += "\",\"logger\":\"";
+        out += "\",\"native_tid\":";
+        out += std::to_string(record.native_thread_id);
+        out += ",\"logger\":\"";
         detail::append_escaped_json(out, record.logger_name);
         out += "\",\"message\":\"";
         detail::append_escaped_json(out, record.message);
