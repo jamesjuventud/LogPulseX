@@ -78,6 +78,7 @@ public:
         record.level = lvl;
         record.timestamp = std::chrono::system_clock::now();
         record.thread_id = std::this_thread::get_id();
+        record.native_thread_id = detail::get_native_thread_id();
         record.process_id = detail::get_process_id();
         record.logger_name = name_;
         record.message = detail::format(fmt, args...);
@@ -107,6 +108,7 @@ public:
         record.level = lvl;
         record.timestamp = std::chrono::system_clock::now();
         record.thread_id = std::this_thread::get_id();
+        record.native_thread_id = detail::get_native_thread_id();
         record.process_id = detail::get_process_id();
         record.logger_name = name_;
         record.message = std::string(message);
