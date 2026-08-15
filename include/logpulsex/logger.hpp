@@ -17,6 +17,51 @@
 #include "logpulsex/sink.hpp"
 #include "logpulsex/spsc_mpsc_queue.hpp"
 
+namespace logpulsex::detail {
+
+// Tracks whether the *current* thread already holds one of this
+// library's own internal mutexes (Logger::sinks_mutex_, Registry::mutex_).
+// A synchronous fault (SIGSEGV, ...) is delivered by the OS to the exact
+// thread that caused it, so if that thread crashed while it happened to
+// be inside one of these critical sections (e.g. the worker thread
+// faulting inside a sink's write() call, which runs under
+// sinks_mutex_), a crash handler that blindly re-locks the same mutex
+// would self-deadlock -- undefined behavior for a non-recursive mutex,
+// and just as undefined for try_lock() on an already-owned mutex, so
+// this has to be tracked explicitly rather than probed for. The depth
+// counter is incremented before lock() and decremented after unlock()
+// (not the reverse) so the window where it reports "held" is always a
+// superset of the real locked window -- conservative in both directions,
+// never a false "safe to lock".
+inline int& internal_lock_depth() {
+    thread_local int depth = 0;
+    return depth;
+}
+
+inline bool thread_holds_internal_lock() {
+    return internal_lock_depth() > 0;
+}
+
+template <typename Mutex>
+class InternalMutexGuard {
+public:
+    explicit InternalMutexGuard(Mutex& m) : mutex_(m) {
+        ++internal_lock_depth();
+        mutex_.lock();
+    }
+    ~InternalMutexGuard() {
+        mutex_.unlock();
+        --internal_lock_depth();
+    }
+    InternalMutexGuard(const InternalMutexGuard&) = delete;
+    InternalMutexGuard& operator=(const InternalMutexGuard&) = delete;
+
+private:
+    Mutex& mutex_;
+};
+
+} // namespace logpulsex::detail
+
 namespace logpulsex {
 
 // What happens when the queue is full and a producer thread tries to log.
@@ -54,7 +99,7 @@ public:
     }
 
     void add_sink(std::shared_ptr<ISink> sink) {
-        std::lock_guard<std::mutex> lock(sinks_mutex_);
+        detail::InternalMutexGuard lock(sinks_mutex_);
         sinks_.push_back(std::move(sink));
     }
 
@@ -133,8 +178,27 @@ public:
         while (approx_size_.load(std::memory_order_acquire) > 0) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
-        std::lock_guard<std::mutex> lock(sinks_mutex_);
+        detail::InternalMutexGuard lock(sinks_mutex_);
         for (auto& sink : sinks_) sink->flush();
+    }
+
+    // Crash-handler-only counterpart to flush(): must never block
+    // indefinitely and must never attempt to lock a mutex this exact
+    // thread already holds (see InternalMutexGuard's doc comment). Does
+    // not wait for the queue to drain -- if the worker thread is the one
+    // that crashed, it never will -- so this only flushes whatever sinks
+    // have already buffered/written, on a short bounded timeout. Strictly
+    // a best-effort improvement over doing nothing: still not a strict
+    // POSIX async-signal-safe guarantee (sink->flush() may itself
+    // allocate or call libc I/O not on the async-signal-safe list), but
+    // it eliminates the deterministic self-deadlock case entirely.
+    void flush_best_effort() noexcept {
+        if (detail::thread_holds_internal_lock()) return;
+        if (!sinks_mutex_.try_lock_for(std::chrono::milliseconds(20))) return;
+        std::lock_guard<std::timed_mutex> lock(sinks_mutex_, std::adopt_lock);
+        for (auto& sink : sinks_) {
+            try { sink->flush(); } catch (...) { /* best effort; nothing more we can do here */ }
+        }
     }
 
     void shutdown() {
@@ -146,7 +210,7 @@ public:
             stop_requested_.store(true, std::memory_order_release);
             worker_.join();
         }
-        std::lock_guard<std::mutex> lock(sinks_mutex_);
+        detail::InternalMutexGuard lock(sinks_mutex_);
         for (auto& sink : sinks_) sink->flush();
     }
 
@@ -202,7 +266,7 @@ private:
     }
 
     void dispatch(const LogRecord& record) {
-        std::lock_guard<std::mutex> lock(sinks_mutex_);
+        detail::InternalMutexGuard lock(sinks_mutex_);
         for (auto& sink : sinks_) {
             if (record.level < sink->level()) continue;
             // A misbehaving sink (e.g. disk full, network down) must not
@@ -226,7 +290,7 @@ private:
     std::atomic<std::size_t> dropped_count_{0};
     std::atomic<std::size_t> sink_error_count_{0};
 
-    std::mutex sinks_mutex_;
+    std::timed_mutex sinks_mutex_;
     std::vector<std::shared_ptr<ISink>> sinks_;
 
     std::thread worker_;

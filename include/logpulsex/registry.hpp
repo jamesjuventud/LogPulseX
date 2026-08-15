@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <csignal>
 #include <cstdlib>
 #include <memory>
@@ -23,7 +24,7 @@ public:
     }
 
     std::shared_ptr<Logger> get_or_create(const std::string& name, LoggerConfig config = {}) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        detail::InternalMutexGuard lock(mutex_);
         auto it = loggers_.find(name);
         if (it != loggers_.end()) return it->second;
         auto logger = std::make_shared<Logger>(name, config);
@@ -33,7 +34,7 @@ public:
 
     // Flushes every registered logger. Safe to call multiple times.
     void flush_all() {
-        std::lock_guard<std::mutex> lock(mutex_);
+        detail::InternalMutexGuard lock(mutex_);
         for (auto& [name, logger] : loggers_) {
             logger->flush();
         }
@@ -43,15 +44,27 @@ public:
     // termination) doesn't silently drop buffered log records that would
     // explain *why* it crashed. Signal handlers are heavily restricted in
     // what they may safely do (async-signal-safety), so this deliberately
-    // does the minimal safe thing: set an atomic flag and, where possible,
-    // perform a best-effort flush before re-raising the default handler.
-    // This is a pragmatic compromise, not a strict async-signal-safety
-    // guarantee — flush() below is NOT fully async-signal-safe (it takes a
-    // mutex), so there is a small residual risk of the handler itself
-    // deadlocking if the crash happened while holding sinks_mutex_. For
-    // applications where this matters, prefer calling flush() explicitly
-    // at well-defined checkpoints rather than relying solely on the
-    // signal handler as a safety net.
+    // does the minimal safe thing: perform a best-effort flush before
+    // re-raising the default handler, via flush_all_best_effort() rather
+    // than the normal flush_all(). The two concrete risks of naively
+    // calling flush_all()/flush() from a signal handler are (1) the exact
+    // thread that just faulted already holding mutex_ or a Logger's
+    // sinks_mutex_ (e.g. it faulted inside a sink's write() call) --
+    // re-locking either from the handler is a guaranteed self-deadlock,
+    // not just a race -- and (2) blocking indefinitely if some other
+    // thread holds a lock and, post-fault, never releases it.
+    // flush_all_best_effort()/Logger::flush_best_effort() address both:
+    // a thread-local reentrancy check (see InternalMutexGuard in
+    // logger.hpp) skips locks this thread already owns instead of
+    // re-locking them, and every lock attempt is bounded with
+    // try_lock_for() instead of blocking forever. This is still not a
+    // strict POSIX async-signal-safe guarantee -- iterating the map and
+    // calling sink->flush() can allocate or call libc I/O not on the
+    // async-signal-safe list -- but it eliminates the deterministic
+    // deadlock/hang failure mode entirely. For applications where full
+    // async-signal-safety matters, prefer calling flush() explicitly at
+    // well-defined checkpoints rather than relying solely on this handler
+    // as a safety net.
     void install_crash_handlers() {
         bool expected = false;
         if (!handlers_installed_.compare_exchange_strong(expected, true)) return;
@@ -65,8 +78,19 @@ public:
 private:
     Registry() = default;
 
+    // See install_crash_handlers()'s doc comment: bounded, self-deadlock-
+    // aware counterpart to flush_all(), used only from on_fatal_signal().
+    void flush_all_best_effort() noexcept {
+        if (detail::thread_holds_internal_lock()) return;
+        if (!mutex_.try_lock_for(std::chrono::milliseconds(50))) return;
+        std::lock_guard<std::timed_mutex> lock(mutex_, std::adopt_lock);
+        for (auto& [name, logger] : loggers_) {
+            logger->flush_best_effort();
+        }
+    }
+
     static void on_fatal_signal(int sig) {
-        instance().flush_all();
+        instance().flush_all_best_effort();
         std::signal(sig, SIG_DFL);
         std::raise(sig);
     }
@@ -75,7 +99,7 @@ private:
         instance().flush_all();
     }
 
-    std::mutex mutex_;
+    std::timed_mutex mutex_;
     std::unordered_map<std::string, std::shared_ptr<Logger>> loggers_;
     std::atomic<bool> handlers_installed_{false};
 };
