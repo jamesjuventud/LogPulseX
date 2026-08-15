@@ -84,6 +84,18 @@ inline void append_escaped_json(std::string& out, std::string_view text) {
     }
 }
 
+// Reused across records on the worker thread (the only thread that ever
+// calls a formatter -- see ISink's doc comment), avoiding a fresh
+// ostringstream construction/destruction per record purely to render a
+// std::thread::id, whose printed form has no direct string conversion.
+inline std::string stringify_thread_id(std::thread::id id) {
+    thread_local std::ostringstream ss;
+    ss.str(std::string());
+    ss.clear();
+    ss << id;
+    return ss.str();
+}
+
 } // namespace detail
 
 // Human-readable "%time% [%level%] logger: message" style output.
@@ -129,9 +141,7 @@ private:
         } else if (token == "logger") {
             out += r.logger_name;
         } else if (token == "thread") {
-            std::ostringstream ss;
-            ss << r.thread_id;
-            out += ss.str();
+            out += detail::stringify_thread_id(r.thread_id);
         } else if (token == "native_tid") {
             out += std::to_string(r.native_thread_id);
         } else if (token == "pid") {
@@ -201,11 +211,7 @@ public:
         out += "\",\"pid\":";
         out += std::to_string(record.process_id);
         out += ",\"tid\":\"";
-        {
-            std::ostringstream tid_ss;
-            tid_ss << record.thread_id;
-            detail::append_escaped_json(out, tid_ss.str());
-        }
+        detail::append_escaped_json(out, detail::stringify_thread_id(record.thread_id));
         out += "\",\"native_tid\":";
         out += std::to_string(record.native_thread_id);
         out += ",\"logger\":\"";

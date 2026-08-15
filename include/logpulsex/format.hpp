@@ -213,15 +213,35 @@ void format_into(std::ostringstream& out, std::string_view fmt, const T& value, 
     // extras rather than throwing — a mismatched call must never crash.
 }
 
+// One reused ostringstream per producer thread, instead of a fresh one
+// per log call. A fresh ostringstream is cheap to construct, but its
+// internal string buffer is not: once a formatted message grows past
+// SSO (common for real log lines), every call would otherwise pay a
+// heap allocation + deallocation just for scratch space that's about to
+// be copied out and discarded. Reusing the same buffer across calls on
+// a given thread means it grows once and is then reused indefinitely.
+// thread_local (rather than a shared static) keeps this contention-free
+// across concurrent producer threads, matching the pattern already used
+// for get_native_thread_id() in log_record.hpp. Safe to reuse across
+// calls because any code that mutates stream flags/fill (e.g. HexBytes
+// in hex.hpp) already restores them via OstreamFormatGuard before
+// returning -- see that header's doc comment.
+inline std::ostringstream& scratch_stream() {
+    thread_local std::ostringstream out;
+    out.str(std::string());
+    out.clear();
+    return out;
+}
+
 inline std::string format(std::string_view fmt) {
-    std::ostringstream out;
+    std::ostringstream& out = scratch_stream();
     append_literal(out, fmt);
     return out.str();
 }
 
 template <typename... Args>
 std::string format(std::string_view fmt, const Args&... args) {
-    std::ostringstream out;
+    std::ostringstream& out = scratch_stream();
     format_into(out, fmt, args...);
     return out.str();
 }
