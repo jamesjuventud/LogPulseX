@@ -11,56 +11,13 @@
 #include <thread>
 #include <vector>
 
+#include "logpulsex/backtrace_ring_buffer.hpp"
 #include "logpulsex/format.hpp"
+#include "logpulsex/internal_lock.hpp"
 #include "logpulsex/level.hpp"
 #include "logpulsex/log_record.hpp"
 #include "logpulsex/sink.hpp"
 #include "logpulsex/spsc_mpsc_queue.hpp"
-
-namespace logpulsex::detail {
-
-// Tracks whether the *current* thread already holds one of this
-// library's own internal mutexes (Logger::sinks_mutex_, Registry::mutex_).
-// A synchronous fault (SIGSEGV, ...) is delivered by the OS to the exact
-// thread that caused it, so if that thread crashed while it happened to
-// be inside one of these critical sections (e.g. the worker thread
-// faulting inside a sink's write() call, which runs under
-// sinks_mutex_), a crash handler that blindly re-locks the same mutex
-// would self-deadlock -- undefined behavior for a non-recursive mutex,
-// and just as undefined for try_lock() on an already-owned mutex, so
-// this has to be tracked explicitly rather than probed for. The depth
-// counter is incremented before lock() and decremented after unlock()
-// (not the reverse) so the window where it reports "held" is always a
-// superset of the real locked window -- conservative in both directions,
-// never a false "safe to lock".
-inline int& internal_lock_depth() {
-    thread_local int depth = 0;
-    return depth;
-}
-
-inline bool thread_holds_internal_lock() {
-    return internal_lock_depth() > 0;
-}
-
-template <typename Mutex>
-class InternalMutexGuard {
-public:
-    explicit InternalMutexGuard(Mutex& m) : mutex_(m) {
-        ++internal_lock_depth();
-        mutex_.lock();
-    }
-    ~InternalMutexGuard() {
-        mutex_.unlock();
-        --internal_lock_depth();
-    }
-    InternalMutexGuard(const InternalMutexGuard&) = delete;
-    InternalMutexGuard& operator=(const InternalMutexGuard&) = delete;
-
-private:
-    Mutex& mutex_;
-};
-
-} // namespace logpulsex::detail
 
 namespace logpulsex {
 
@@ -117,7 +74,9 @@ public:
     template <typename... Args>
     void log(Level lvl, const char* file, int line, const char* function,
               std::string_view fmt, const Args&... args) {
-        if (!should_log(lvl)) return;
+        bool normal = should_log(lvl);
+        bool capture = backtrace_enabled_.load(std::memory_order_relaxed);
+        if (!normal && !capture) return;
 
         LogRecord record;
         record.level = lvl;
@@ -130,6 +89,9 @@ public:
         record.file = file;
         record.line = line;
         record.function = function;
+
+        if (capture) backtrace_buffer_.push(record);
+        if (!normal) return;
 
         enqueue(std::move(record));
 
@@ -147,7 +109,9 @@ public:
     // Called by the LOG_*_KV macros.
     void log_kv(Level lvl, const char* file, int line, const char* function,
                 std::string_view message, std::initializer_list<Field> fields) {
-        if (!should_log(lvl)) return;
+        bool normal = should_log(lvl);
+        bool capture = backtrace_enabled_.load(std::memory_order_relaxed);
+        if (!normal && !capture) return;
 
         LogRecord record;
         record.level = lvl;
@@ -161,6 +125,9 @@ public:
         record.file = file;
         record.line = line;
         record.function = function;
+
+        if (capture) backtrace_buffer_.push(record);
+        if (!normal) return;
 
         enqueue(std::move(record));
 
@@ -196,8 +163,63 @@ public:
         if (detail::thread_holds_internal_lock()) return;
         if (!sinks_mutex_.try_lock_for(std::chrono::milliseconds(20))) return;
         std::lock_guard<std::timed_mutex> lock(sinks_mutex_, std::adopt_lock);
+        detail::LockDepthScope depth_scope;
+
+        // Best-effort: surface any buffered backtrace context before
+        // flushing, so a crash report captures the trace/debug detail
+        // leading up to it, not just the fact that it happened. Bounded
+        // and reentrancy-aware for the same reason as sinks_mutex_ above
+        // -- see RingBuffer::try_snapshot()'s doc comment.
+        if (backtrace_enabled_.load(std::memory_order_relaxed)) {
+            std::vector<LogRecord> backtrace;
+            if (backtrace_buffer_.try_snapshot(std::chrono::milliseconds(20), backtrace)) {
+                for (auto& record : backtrace) {
+                    for (auto& sink : sinks_) {
+                        if (record.level < sink->level()) continue;
+                        try { sink->write(record); } catch (...) { /* best effort */ }
+                    }
+                }
+            }
+        }
+
         for (auto& sink : sinks_) {
             try { sink->flush(); } catch (...) { /* best effort; nothing more we can do here */ }
+        }
+    }
+
+    // Keeps the last `n` records in memory -- at any level not compiled
+    // out via LOGPULSEX_MIN_LEVEL -- bypassing the runtime severity
+    // filter set by set_level(), so verbose diagnostic detail survives
+    // even when the configured level is quieter (e.g. info/warn).
+    // Nothing reaches sinks until dump_backtrace() is called, so this
+    // buys the diagnostic value of trace-level logging without paying
+    // sink I/O for every message up front. Safe to call from any thread.
+    void enable_backtrace(std::size_t n) {
+        backtrace_buffer_.reset(n);
+        backtrace_enabled_.store(true, std::memory_order_relaxed);
+    }
+
+    void disable_backtrace() {
+        backtrace_enabled_.store(false, std::memory_order_relaxed);
+        backtrace_buffer_.clear();
+    }
+
+    bool backtrace_enabled() const noexcept {
+        return backtrace_enabled_.load(std::memory_order_relaxed);
+    }
+
+    // Replays every currently-buffered record through the normal async
+    // queue, in original insertion (oldest-to-newest) order, preserving
+    // each record's original timestamp/level so a reader can tell they're
+    // historical context rather than newly-occurring events. Goes through
+    // the same queue + worker thread as ordinary log() calls -- never
+    // writes to a sink directly from the calling thread -- so it
+    // respects the existing single-writer-per-sink contract (see ISink's
+    // doc comment). Does not clear the buffer: it keeps collecting, and
+    // calling this again later simply replays whatever it holds then.
+    void dump_backtrace() {
+        for (auto& record : backtrace_buffer_.snapshot()) {
+            enqueue(std::move(record));
         }
     }
 
@@ -292,6 +314,9 @@ private:
 
     std::timed_mutex sinks_mutex_;
     std::vector<std::shared_ptr<ISink>> sinks_;
+
+    std::atomic<bool> backtrace_enabled_{false};
+    detail::RingBuffer<LogRecord> backtrace_buffer_;
 
     std::thread worker_;
     std::atomic<bool> stop_requested_{false};

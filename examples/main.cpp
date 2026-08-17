@@ -15,8 +15,11 @@ int main() {
     auto console = std::make_shared<ConsoleSink>();
     console->set_level(Level::info); // keep console less noisy than the file
 
+    auto daily = std::make_shared<DailyFileSink>("app_daily.log",0,0,true);
+    daily->set_level(Level::raw); // daily file gets more detail than console
+
     auto file_sink = std::make_shared<RotatingFileSink>(
-        "app.log", /*max_bytes=*/1 * 1024 * 1024, /*max_files=*/5);
+        "app.log", /*max_bytes=*/1 * 1024 * 5024, /*max_files=*/5);
     file_sink->set_formatter(std::make_shared<JsonFormatter>());
     // Route verbose raw/hex-dump content to the file only -- both the
     // Logger's and this sink's own level need to permit Level::raw
@@ -26,6 +29,7 @@ int main() {
 
     logger->add_sink(console);
     logger->add_sink(file_sink);
+    logger->add_sink(daily);
 
     install_crash_handlers();
 
@@ -73,6 +77,22 @@ int main() {
     }
     LOG_RAW("Device payload ({} bytes):\n{}", sizeof(device_payload),
             format_hex_dump(device_payload, sizeof(device_payload)));
+
+    // --- Backtrace ring buffer: keep the last N records (any level)
+    // in memory even though the logger/console are only tuned down to
+    // info/warn, then replay them on demand (e.g. right before/after a
+    // recoverable error) without paying sink I/O cost for every one of
+    // them up front. A crash also triggers a best-effort replay via
+    // install_crash_handlers() above.
+    logger->enable_backtrace(50);
+    LOG_DEBUG("Cache miss for key={}", "session:42");     // console: suppressed (below info); file/daily: written live
+    LOG_DEBUG("Retrying upstream call, attempt={}", 2);   // console: suppressed (below info); file/daily: written live
+    LOG_WARN("Upstream call slow: {} ms", 850);            // console + file/daily: written live (warn passes every sink's level)
+    // Replays all 3 buffered records through the normal pipeline again --
+    // each sink re-applies its own level filter, so console still only
+    // shows the warn line (now twice: once live, once replayed), while
+    // file/daily (level raw) show all 3 lines twice.
+    dump_backtrace();
 
     // --- Concurrency: many producer threads, one consumer thread ------
     std::vector<std::thread> workers;

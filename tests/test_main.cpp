@@ -82,6 +82,93 @@ void test_default_logger_is_stable_and_singular_under_concurrent_first_use() {
     }
 }
 
+void test_backtrace_captures_below_threshold_and_dump_delivers_them() {
+    Logger logger("backtrace_threshold_test");
+    logger.set_level(Level::warn); // trace/debug/info suppressed from normal path
+    auto capture = std::make_shared<CapturingSink>();
+    logger.add_sink(capture);
+
+    logger.enable_backtrace(16);
+    LOG_TRACE_TO((&logger), "trace {}", 1);
+    LOG_DEBUG_TO((&logger), "debug {}", 2);
+    LOG_INFO_TO((&logger), "info {}", 3);
+    logger.flush();
+    CHECK(capture->count() == 0); // nothing reached sinks yet: below threshold
+
+    logger.dump_backtrace();
+    logger.flush();
+    CHECK(capture->count() == 3);
+}
+
+void test_backtrace_disabled_by_default() {
+    Logger logger("backtrace_default_test");
+    logger.set_level(Level::trace);
+    auto capture = std::make_shared<CapturingSink>();
+    logger.add_sink(capture);
+
+    CHECK(!logger.backtrace_enabled());
+    LOG_INFO_TO((&logger), "info {}", 1);
+    logger.flush();
+    CHECK(capture->count() == 1); // normal path unaffected
+
+    logger.dump_backtrace(); // no-op: buffer capacity is 0
+    logger.flush();
+    CHECK(capture->count() == 1);
+}
+
+void test_backtrace_overwrites_oldest_once_capacity_exceeded() {
+    Logger logger("backtrace_overwrite_test");
+    logger.set_level(Level::off); // keep everything out of the normal path
+    auto capture = std::make_shared<CapturingSink>();
+    logger.add_sink(capture);
+
+    logger.enable_backtrace(3);
+    for (int i = 0; i < 10; ++i) {
+        LOG_INFO_TO((&logger), "msg {}", i);
+    }
+    logger.dump_backtrace();
+    logger.flush();
+
+    CHECK(capture->count() == 3);
+    CHECK(capture->records[0].message == "msg 7");
+    CHECK(capture->records[1].message == "msg 8");
+    CHECK(capture->records[2].message == "msg 9");
+}
+
+void test_backtrace_disable_clears_buffer() {
+    Logger logger("backtrace_disable_test");
+    logger.set_level(Level::off);
+    auto capture = std::make_shared<CapturingSink>();
+    logger.add_sink(capture);
+
+    logger.enable_backtrace(8);
+    LOG_INFO_TO((&logger), "msg {}", 1);
+    logger.disable_backtrace();
+    CHECK(!logger.backtrace_enabled());
+
+    logger.dump_backtrace(); // buffer was cleared; nothing to replay
+    logger.flush();
+    CHECK(capture->count() == 0);
+}
+
+void test_backtrace_dump_does_not_clear_and_is_repeatable() {
+    Logger logger("backtrace_repeat_test");
+    logger.set_level(Level::off);
+    auto capture = std::make_shared<CapturingSink>();
+    logger.add_sink(capture);
+
+    logger.enable_backtrace(4);
+    LOG_INFO_TO((&logger), "only {}", 1);
+
+    logger.dump_backtrace();
+    logger.flush();
+    CHECK(capture->count() == 1);
+
+    logger.dump_backtrace(); // replays the same buffered record again
+    logger.flush();
+    CHECK(capture->count() == 2);
+}
+
 void test_log_if() {
     Logger logger("if_test");
     logger.set_level(Level::trace);
@@ -1355,6 +1442,11 @@ int main() {
     test_rotating_file_sink_accounts_for_preexisting_file_size();
     test_rotating_file_sink_rotates();
     test_overflow_policy_drop_newest_does_not_block();
+    test_backtrace_captures_below_threshold_and_dump_delivers_them();
+    test_backtrace_disabled_by_default();
+    test_backtrace_overwrites_oldest_once_capacity_exceeded();
+    test_backtrace_disable_clears_buffer();
+    test_backtrace_dump_does_not_clear_and_is_repeatable();
 
     if (g_failures == 0) {
         std::cout << "All tests passed.\n";

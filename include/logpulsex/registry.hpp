@@ -84,6 +84,7 @@ private:
         if (detail::thread_holds_internal_lock()) return;
         if (!mutex_.try_lock_for(std::chrono::milliseconds(50))) return;
         std::lock_guard<std::timed_mutex> lock(mutex_, std::adopt_lock);
+        detail::LockDepthScope depth_scope;
         for (auto& [name, logger] : loggers_) {
             logger->flush_best_effort();
         }
@@ -134,6 +135,24 @@ inline std::shared_ptr<Logger> get_logger(const std::string& name, LoggerConfig 
 
 inline void install_crash_handlers() {
     Registry::instance().install_crash_handlers();
+}
+
+// Convenience wrappers around the default logger's backtrace feature --
+// see Logger::enable_backtrace()/dump_backtrace() in logger.hpp. Pairs
+// naturally with install_crash_handlers(): the crash handler already
+// calls Logger::flush_best_effort() (which surfaces any buffered
+// backtrace) on a fault, and dump_backtrace() lets application code
+// trigger the same replay explicitly, e.g. right before a handled error.
+inline void enable_backtrace(std::size_t n) {
+    default_logger()->enable_backtrace(n);
+}
+
+inline void disable_backtrace() {
+    default_logger()->disable_backtrace();
+}
+
+inline void dump_backtrace() {
+    default_logger()->dump_backtrace();
 }
 
 } // namespace logpulsex
