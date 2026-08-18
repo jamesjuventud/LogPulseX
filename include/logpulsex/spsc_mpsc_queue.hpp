@@ -43,7 +43,25 @@ public:
 
     // Attempts to enqueue by copy/move. Returns false if the queue is full
     // (caller decides the backpressure policy — block, drop, retry, etc.).
+    // Note: on failure this by-value overload's local `item` is simply
+    // discarded (matches historical behavior) -- callers that need to
+    // retry the *same* value after a failed attempt without risking data
+    // loss on move-only/non-trivial T should use try_push_preserve()
+    // instead, which never touches the caller's object unless the push
+    // actually succeeds.
     bool try_push(T item) noexcept {
+        return try_push_preserve(item);
+    }
+
+    // Like try_push(), but takes item by lvalue reference and only ever
+    // moves from it once success is guaranteed. On failure (queue full),
+    // `item` is left completely untouched, so a retry loop can safely
+    // call this again with the same object -- unlike passing by value,
+    // where the move into the (discarded) parameter happens unconditionally
+    // at the call site regardless of the eventual outcome, silently
+    // emptying non-trivial members (e.g. std::string/std::vector) even on
+    // a failed attempt.
+    bool try_push_preserve(T& item) noexcept {
         Cell* cell;
         std::size_t pos = enqueue_pos_.load(std::memory_order_relaxed);
         for (;;) {
@@ -59,7 +77,7 @@ public:
                 // CAS failed: another producer won the slot, pos was
                 // refreshed by compare_exchange_weak, retry.
             } else if (diff < 0) {
-                return false; // queue full
+                return false; // queue full; item untouched
             } else {
                 pos = enqueue_pos_.load(std::memory_order_relaxed);
             }

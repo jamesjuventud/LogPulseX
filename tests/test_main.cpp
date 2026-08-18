@@ -1379,6 +1379,122 @@ void test_overflow_policy_drop_newest_does_not_block() {
     CHECK(true); // reaching here means we didn't deadlock/hang
 }
 
+void test_overflow_policy_drop_oldest_flush_completes() {
+    // Regression test: drop_oldest evicts a queued record on the
+    // producer thread via a direct try_pop(); if approx_size_ isn't
+    // decremented to match, it permanently drifts above the real queue
+    // occupancy and flush()'s "wait until drained" loop would never
+    // observe zero. Reaching past flush() here is the actual assertion.
+    LoggerConfig cfg;
+    cfg.queue_capacity = 4;
+    cfg.overflow_policy = OverflowPolicy::drop_oldest;
+    Logger logger("overflow_drop_oldest_test", cfg);
+    logger.set_level(Level::trace);
+    auto sink = std::make_shared<CapturingSink>();
+    logger.add_sink(sink);
+
+    for (int i = 0; i < 10000; ++i) {
+        LOG_INFO_TO((&logger), "flood {}", i);
+    }
+    logger.flush();
+    CHECK(true); // reaching here means flush() returned instead of hanging
+    CHECK(logger.dropped_count_snapshot() > 0); // tiny capacity guarantees evictions happened
+}
+
+void test_enqueue_retry_does_not_corrupt_record_contents() {
+    // Regression test: enqueue()'s retry loop used to call
+    // queue_.try_push(std::move(record)) unconditionally on every
+    // attempt. Because try_push(T) takes its parameter by value, that
+    // move happened at the call site regardless of whether the push
+    // ultimately succeeded, so a failed first attempt silently emptied
+    // message/logger_name/fields before the *next* retry ever ran --
+    // corrupting/losing data under drop_oldest and block. This verifies
+    // every record that actually reaches the sink still has its real,
+    // non-empty message content intact.
+    LoggerConfig cfg;
+    cfg.queue_capacity = 4; // tiny: guarantees try_push fails and retries often
+    cfg.overflow_policy = OverflowPolicy::drop_oldest;
+    Logger logger("enqueue_retry_integrity_test", cfg);
+    logger.set_level(Level::trace);
+    auto sink = std::make_shared<CapturingSink>();
+    logger.add_sink(sink);
+
+    constexpr int kMessages = 2000;
+    for (int i = 0; i < kMessages; ++i) {
+        LOG_INFO_TO((&logger), "payload-{}", i);
+    }
+    logger.flush();
+
+    CHECK(sink->count() > 0);
+    for (std::size_t i = 0; i < sink->count(); ++i) {
+        const auto& rec = sink->records[i];
+        // The bug produced empty strings; a real delivered record must
+        // always have a non-empty, well-formed "payload-<N>" message.
+        CHECK(!rec.message.empty());
+        CHECK(rec.message.rfind("payload-", 0) == 0);
+        CHECK(!rec.logger_name.empty());
+    }
+}
+
+void test_overflow_policy_block_multithreaded_delivers_all_and_does_not_hang() {
+    // Stress test for the condvar-based backpressure wakeup: many
+    // producer threads contending over a deliberately tiny bounded queue
+    // with OverflowPolicy::block must (a) never drop a record and (b)
+    // never leave a producer thread waiting on a signal that never
+    // arrives.
+    LoggerConfig cfg;
+    cfg.queue_capacity = 8;
+    cfg.overflow_policy = OverflowPolicy::block;
+    Logger logger("overflow_block_stress_test", cfg);
+    logger.set_level(Level::trace);
+    auto sink = std::make_shared<CapturingSink>();
+    logger.add_sink(sink);
+
+    constexpr int kThreads = 8;
+    constexpr int kPerThread = 2000;
+    std::vector<std::thread> producers;
+    producers.reserve(kThreads);
+    for (int t = 0; t < kThreads; ++t) {
+        producers.emplace_back([&logger, t] {
+            for (int i = 0; i < kPerThread; ++i) {
+                LOG_INFO_TO((&logger), "thread {} msg {}", t, i);
+            }
+        });
+    }
+    for (auto& th : producers) th.join();
+    logger.flush();
+
+    CHECK(sink->count() == static_cast<std::size_t>(kThreads) * kPerThread);
+    CHECK(logger.dropped_count_snapshot() == 0); // block must never drop a record
+}
+
+void test_flush_concurrent_waiters_all_return() {
+    // Multiple threads calling flush() at the same time must all
+    // observe the drain complete and return, exercising flush_waiters_
+    // / drained_cv_ with more than one concurrent waiter.
+    LoggerConfig cfg;
+    cfg.queue_capacity = 64;
+    Logger logger("flush_concurrent_test", cfg);
+    logger.set_level(Level::trace);
+    auto sink = std::make_shared<CapturingSink>();
+    logger.add_sink(sink);
+
+    constexpr int kMessages = 5000;
+    for (int i = 0; i < kMessages; ++i) {
+        LOG_INFO_TO((&logger), "msg {}", i);
+    }
+
+    constexpr int kWaiters = 6;
+    std::vector<std::thread> waiters;
+    waiters.reserve(kWaiters);
+    for (int i = 0; i < kWaiters; ++i) {
+        waiters.emplace_back([&logger] { logger.flush(); });
+    }
+    for (auto& th : waiters) th.join();
+
+    CHECK(sink->count() == static_cast<std::size_t>(kMessages));
+}
+
 int main() {
     test_network_sink_no_server_does_not_block();
     test_network_sink_backlog_is_bounded();
@@ -1442,6 +1558,10 @@ int main() {
     test_rotating_file_sink_accounts_for_preexisting_file_size();
     test_rotating_file_sink_rotates();
     test_overflow_policy_drop_newest_does_not_block();
+    test_overflow_policy_drop_oldest_flush_completes();
+    test_enqueue_retry_does_not_corrupt_record_contents();
+    test_overflow_policy_block_multithreaded_delivers_all_and_does_not_hang();
+    test_flush_concurrent_waiters_all_return();
     test_backtrace_captures_below_threshold_and_dump_delivers_them();
     test_backtrace_disabled_by_default();
     test_backtrace_overwrites_oldest_once_capacity_exceeded();
