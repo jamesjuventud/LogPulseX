@@ -89,3 +89,24 @@ if(LOGPULSEX_BUILD_TESTS)
     add_test(NAME logpulsex_network_test COMMAND logpulsex_network_test
              WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 endif()
+
+# Performance benchmark suite (bench/): custom zero-dependency harness,
+# off by default since it's not needed for normal builds/CI correctness
+# checks. See README.md's "Benchmarking" section for usage.
+option(LOGPULSEX_BUILD_BENCHMARKS "Build performance benchmark suite" OFF)
+if(LOGPULSEX_BUILD_BENCHMARKS)
+    if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
+        message(WARNING
+            "LOGPULSEX_BUILD_BENCHMARKS is ON but CMAKE_BUILD_TYPE is not "
+            "'Release' -- the Debug config enables -fsanitize=address,undefined "
+            "(see the GNU|Clang compile options above), which will badly skew "
+            "benchmark timings. Re-run CMake with -DCMAKE_BUILD_TYPE=Release.")
+    endif()
+    add_executable(logpulsex_bench
+        bench/bench_main.cpp
+        bench/micro_bench.cpp
+        bench/throughput_bench.cpp
+        bench/multithread_bench.cpp
+        bench/sink_io_bench.cpp)
+    target_link_libraries(logpulsex_bench PRIVATE logpulsex)
+endif()
