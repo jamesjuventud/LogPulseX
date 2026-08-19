@@ -26,6 +26,16 @@ void run_throughput_benchmarks(Reporter& reporter, std::chrono::seconds duration
                     "Order {} for {} amount {:.2f}", 123, "bob", 59.99);
     }));
 
+    // Plain literal message, no "{}" placeholders at all -- exercises
+    // detail::format()'s no-braces fast path (see format.hpp), which
+    // skips ostringstream entirely for this common case (e.g.
+    // LOG_INFO("connection established")).
+    reporter.add("throughput", run_latency("log() call latency (NullSink, plain message)", latency_iterations,
+                                            latency_warmup, [&] {
+        logger.log(logpulsex::Level::info, __FILE__, __LINE__, __func__,
+                    "connection established, ready to accept requests");
+    }));
+
     // Matches spdlog's "C-string (400 bytes)" benchmark payload, for a
     // like-for-like comparison against its null_st result.
     std::string large_message(400, 'x');

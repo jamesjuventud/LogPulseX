@@ -89,6 +89,25 @@ inline FormatSpec parse_spec(std::string_view spec) {
     return s;
 }
 
+// Reused across calls on a given thread, same rationale as
+// scratch_stream() below -- a distinct instance because apply_value()'s
+// `tmp` is used to build one argument's padded text while the caller's
+// `out` stream (the overall message being assembled) is still open, so
+// the two must never alias the same object. Unlike scratch_stream(),
+// this also resets format flags/precision/fill via copyfmt() from a
+// never-mutated, default-constructed prototype: a reused stream carries
+// over std::hex/std::fixed/setprecision(...) etc. from whatever the
+// previous call set, which a freshly-constructed ostringstream (the
+// previous, non-reused version of this code) never had to worry about.
+inline std::ostringstream& spec_scratch_stream() {
+    static const std::ostringstream pristine;
+    thread_local std::ostringstream out;
+    out.str(std::string());
+    out.clear();
+    out.copyfmt(pristine);
+    return out;
+}
+
 template <typename T>
 void apply_value(std::ostringstream& out, const T& value, const FormatSpec& spec) {
     if (!spec.has_spec) {
@@ -96,7 +115,7 @@ void apply_value(std::ostringstream& out, const T& value, const FormatSpec& spec
         return;
     }
 
-    std::ostringstream tmp;
+    std::ostringstream& tmp = spec_scratch_stream();
     if (spec.sign_plus) tmp << std::showpos;
     if (spec.alt_form) tmp << std::showbase;
 
@@ -234,6 +253,19 @@ inline std::ostringstream& scratch_stream() {
 }
 
 inline std::string format(std::string_view fmt) {
+    // Fast path: the vast majority of zero-argument log calls are a
+    // plain literal message with no "{"/"}" characters at all (e.g.
+    // LOG_INFO("starting up")), which append_literal() would just copy
+    // through unchanged anyway. Skipping scratch_stream()/ostringstream
+    // entirely for that case avoids a stream-state reset and an extra
+    // buffer copy (ostringstream::str() copies its internal buffer into
+    // a new std::string) purely to reproduce the input verbatim.
+    // append_literal()'s unescaping ("{{" -> "{", "}}" -> "}") only ever
+    // triggers when at least one brace is present, so this check is a
+    // precise (not approximate) guard, not a heuristic.
+    if (fmt.find_first_of("{}") == std::string_view::npos) {
+        return std::string(fmt);
+    }
     std::ostringstream& out = scratch_stream();
     append_literal(out, fmt);
     return out.str();
