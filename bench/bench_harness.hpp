@@ -27,10 +27,13 @@ inline void do_not_optimize(T const& value) {
 #if defined(__GNUC__) || defined(__clang__)
     asm volatile("" : : "g"(value) : "memory");
 #else
-    // MSVC has no inline-asm-based equivalent on all targets; a volatile
-    // spill is not perfect but is enough to deter constant-folding here.
-    static volatile T sink;
-    sink = value;
+    // MSVC has no inline-asm-based equivalent on all targets. A volatile
+    // storage slot is not viable for types like std::optional<T> because
+    // volatile optional is not assignable. Taking the address of the value
+    // preserves it from optimizer folding while remaining compatible with
+    // non-assignable and non-trivially-copyable types.
+    auto const* volatile ptr = &value;
+    (void)ptr;
 #endif
 }
 
