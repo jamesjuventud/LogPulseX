@@ -15,7 +15,7 @@ int main() {
     auto console = std::make_shared<ConsoleSink>();
     console->set_level(Level::info); // keep console less noisy than the file
 
-    auto daily = std::make_shared<DailyFileSink>("app_daily.log",0,0,true);
+    auto daily = std::make_shared<DailyFileSink>("app_daily.log",0,0,0,true);
     daily->set_level(Level::raw); // daily file gets more detail than console
 
     auto file_sink = std::make_shared<RotatingFileSink>(
