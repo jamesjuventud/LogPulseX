@@ -94,8 +94,18 @@ constexpr std::string_view to_string(Level lvl) noexcept {
 // -Wtype-limits flags that as suspicious. Silenced locally rather than
 // weakened, since LOGPULSEX_MIN_LEVEL is a legitimate build knob that can
 // validly take non-zero values too.
+//
+// Level::raw is special-cased to always stay enabled here regardless of
+// LOGPULSEX_MIN_LEVEL. It is numbered below trace purely for the
+// ordering guarantee (`raw < trace < debug < ...`), not because it's a
+// verbosity tier meant to be stripped from Release the way trace/debug
+// are -- it's a deliberate, explicit escape hatch (LOG_RAW, hex dumps)
+// that a caller opts into by name. Without this exemption, any
+// LOGPULSEX_MIN_LEVEL >= 1 (e.g. this repo's own CMakeLists.txt sets 1
+// for Release builds) would silently compile out every LOG_RAW call,
+// which is never the intent of stripping trace/debug chatter.
 constexpr bool level_enabled_at_compile_time(Level lvl) noexcept {
-    return static_cast<int>(lvl) >= LOGPULSEX_MIN_LEVEL;
+    return lvl == Level::raw || static_cast<int>(lvl) >= LOGPULSEX_MIN_LEVEL;
 }
 
 #if defined(__GNUC__) && !defined(__clang__)

@@ -68,6 +68,9 @@ int main() {
     db_logger->add_sink(console);
     LOG_INFO_TO(db_logger, "Query executed in {} ms", 12.4);
 
+    LOG_TRACE_TO(db_logger, "Query 1 plan: {}", "Seq Scan on users  (cost=0.00..1.05 rows=5 width=244)");
+    LOG_TRACE("Query 2 plan: {}", "Seq Scan on users  (cost=0.00..1.05 rows=5 width=244)");
+
     // --- Structured key/value logging ---------------------------------
     LOG_INFO_KV("Order placed",
                 logpulsex::field("order_id", std::string("A1234")),
@@ -125,6 +128,8 @@ int main() {
         });
     }
     for (auto& t : workers) t.join();
+
+    LOG_FATAL("Simulated unrecoverable error: {}", "out of memory");
 
     LOG_ERROR("Simulated recoverable error: {}", "connection reset");
 

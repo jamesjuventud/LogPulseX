@@ -88,6 +88,16 @@ if(LOGPULSEX_BUILD_TESTS)
         LOGPULSEX_TESTS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests")
     add_test(NAME logpulsex_network_test COMMAND logpulsex_network_test
              WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+
+    # Regression test for the LOGPULSEX_MIN_LEVEL vs. Level::raw interaction
+    # bug (see tests/test_min_level_raw.cpp): built with a nonzero
+    # LOGPULSEX_MIN_LEVEL, matching how this same CMakeLists.txt sets
+    # LOGPULSEX_MIN_LEVEL=1 for Release above, to prove LOG_RAW survives
+    # compile-time stripping while trace/debug are still correctly gated.
+    add_executable(logpulsex_min_level_test tests/test_min_level_raw.cpp)
+    target_link_libraries(logpulsex_min_level_test PRIVATE logpulsex)
+    target_compile_definitions(logpulsex_min_level_test PRIVATE LOGPULSEX_MIN_LEVEL=2)
+    add_test(NAME logpulsex_min_level_test COMMAND logpulsex_min_level_test)
 endif()
 
 # Performance benchmark suite (bench/): custom zero-dependency harness,
