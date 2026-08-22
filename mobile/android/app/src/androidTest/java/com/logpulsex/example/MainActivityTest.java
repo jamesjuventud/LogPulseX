@@ -1,11 +1,12 @@
 package com.logpulsex.example;
 
-import static androidx.test.espresso.Espresso.onView;
-import static androidx.test.espresso.matcher.ViewMatchers.withText;
-import static org.hamcrest.Matchers.containsString;
+import static org.junit.Assert.assertTrue;
 
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.rule.ActivityTestRule;
+
+import android.widget.TextView;
+import android.view.ViewGroup;
 
 import org.junit.Rule;
 import org.junit.Test;
@@ -19,8 +20,8 @@ public class MainActivityTest {
 
     @Test
     public void logpulsexNativeSmokeTestRuns() {
-        onView(withText(containsString("LogPulseX Android test passed"))).check(
-            androidx.test.espresso.assertion.ViewAssertions.matches(
-                withText(containsString("LogPulseX Android test passed"))));
+        ViewGroup content = activityRule.getActivity().findViewById(android.R.id.content);
+        TextView status = (TextView) content.getChildAt(0);
+        assertTrue(status.getText().toString().contains("LogPulseX Android test passed"));
     }
 }
