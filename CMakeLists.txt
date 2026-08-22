@@ -1,6 +1,11 @@
 cmake_minimum_required(VERSION 3.16)
 project(LogPulseX LANGUAGES CXX)
 
+option(LOGPULSEX_BUILD_IOS_APP "Build the iOS simulator smoke-test app" OFF)
+if(LOGPULSEX_BUILD_IOS_APP)
+    enable_language(OBJCXX)
+endif()
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -134,4 +139,12 @@ if(LOGPULSEX_BUILD_BENCHMARKS)
         bench/multithread_bench.cpp
         bench/sink_io_bench.cpp)
     target_link_libraries(logpulsex_bench PRIVATE logpulsex)
+endif()
+
+if(LOGPULSEX_BUILD_IOS_APP)
+    add_executable(logpulsex_ios_app MACOSX_BUNDLE mobile/ios/main.mm)
+    target_link_libraries(logpulsex_ios_app PRIVATE logpulsex)
+    set_target_properties(logpulsex_ios_app PROPERTIES
+        MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/mobile/ios/Info.plist"
+        OUTPUT_NAME "LogPulseXExample")
 endif()
