@@ -98,7 +98,7 @@ jobs:
     - name: Install Android NDK
       shell: bash
       run: |
-        sdkmanager "platforms;android-35" "build-tools;35.0.0" "emulator" "platform-tools" "ndk;27.2.12479018" "system-images;android-35;google_apis;x86_64"
+        sdkmanager "platforms;android-35" "build-tools;35.0.0" "emulator" "platform-tools" "ndk;27.2.12479018" "system-images;android-34;google_apis;x86_64"
         echo "ANDROID_NDK_HOME=${ANDROID_SDK_ROOT}/ndk/27.2.12479018" >> "$GITHUB_ENV"
 
     - name: Set up Gradle
@@ -109,9 +109,12 @@ jobs:
     - name: Build and test Android app
       uses: reactivecircus/android-emulator-runner@v2
       with:
-        api-level: 35
+        api-level: 34
         arch: x86_64
         profile: pixel_2
+        force-avd-creation: true
+        emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+        disable-animations: true
         script: gradle -p mobile/android assemble${{ matrix.build_type }} connected${{ matrix.build_type }}AndroidTest --stacktrace
 
     - name: Upload Android APK
