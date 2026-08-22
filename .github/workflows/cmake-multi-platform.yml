@@ -115,7 +115,7 @@ jobs:
         force-avd-creation: true
         emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
         disable-animations: true
-        script: gradle -p mobile/android assemble${{ matrix.build_type }} connected${{ matrix.build_type }}AndroidTest --stacktrace
+        script: gradle -p mobile/android :app:assemble${{ matrix.build_type }} :app:connected${{ matrix.build_type }}AndroidTest --stacktrace
 
     - name: Upload Android APK
       uses: actions/upload-artifact@v4
