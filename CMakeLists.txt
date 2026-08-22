@@ -5,11 +5,26 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Keep artifacts for each configuration in a predictable subdirectory of
+# the build tree (for example, build/Debug and build/Release).
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/$<CONFIG>")
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/$<CONFIG>")
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/$<CONFIG>")
+
 add_library(logpulsex INTERFACE)
 target_include_directories(logpulsex INTERFACE
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
 )
+
+# Expose the header-only library files in IDE project trees. These are source
+# entries only; they do not change compilation or create a separate library.
+file(GLOB_RECURSE LOGPULSEX_HEADERS CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/include/logpulsex/*.hpp")
+source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/include"
+             PREFIX "Header Files"
+             FILES ${LOGPULSEX_HEADERS})
+target_sources(logpulsex INTERFACE ${LOGPULSEX_HEADERS})
 target_compile_features(logpulsex INTERFACE cxx_std_20)
 
 find_package(Threads REQUIRED)

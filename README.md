@@ -68,25 +68,43 @@ int main() {
 }
 ```
 
-Build:
+**Build Release and Debug Binaries:**   
+With zlib file compression disabled:
 ```
 mkdir build
 cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release
-cmake --build .
-./logpulsex_example
-ctest
+cmake .. -DLOGPULSEX_BUILD_BENCHMARKS=ON
+cmake --build . --config Debug
+cmake --build . --config Release
 ```
 
-Or without CMake:   
-   **Note:** You need to supply this keyword if you want to use zlib file compression "-DLOGPULSEX_HAVE_ZLIB".   
-Windows:
+With zlib file compression enabled:
 ```
-g++ -std=c++20 -O2 -Iinclude -pthread examples/main.cpp -o example
+cmake -S . -B build-zlib `
+  -DCMAKE_TOOLCHAIN_FILE="...\vcpkg\scripts\buildsystems\vcpkg.cmake" `
+  -DVCPKG_TARGET_TRIPLET=x64-windows `
+  -DLOGPULSEX_ENABLE_GZIP=ON `
+  -DLOGPULSEX_BUILD_BENCHMARKS=ON
+cmake --build build-zlib --config Debug
+cmake --build build-zlib --config Release
 ```
-Mac:
+
+Run the Debug or Release executables from their configuration directory:
+```
+cd Debug
+./logpulsex_example.exe
+
+cd Release
+./logpulsex_example.exe
+```
+
+Or without CMake (zlib disabled):     
 ```
 g++ -std=c++20 -O2 -Iinclude -pthread examples/main.cpp -o example -lz
+```
+Or without CMake (zlib enabled):     
+```
+g++ -std=c++20 -O2 -Iinclude -DLOGPULSEX_HAVE_ZLIB -pthread examples/main.cpp -o example -lz
 ```
 
 ## Architecture
@@ -543,9 +561,12 @@ CMake config enables `-fsanitize=address,undefined`, which badly skews
 timings):
 
 ```
-mkdir build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release -DLOGPULSEX_BUILD_BENCHMARKS=ON
-cmake --build . --target logpulsex_bench
+mkdir build
+cd build
+cmake .. -DLOGPULSEX_BUILD_BENCHMARKS=ON
+cmake --build . --config Release --target logpulsex_bench
+cmake --build . --config Debug --target logpulsex_bench
+cd Release
 ./logpulsex_bench
 ```
 
