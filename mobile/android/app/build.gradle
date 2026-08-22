@@ -3,6 +3,7 @@ plugins { id 'com.android.application' }
 android {
     namespace 'com.logpulsex.example'
     compileSdk 35
+    testBuildType = (project.findProperty('testBuildType')?.toString() ?: 'debug').toLowerCase()
 
     defaultConfig {
         applicationId 'com.logpulsex.example'
