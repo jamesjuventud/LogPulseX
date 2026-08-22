@@ -106,6 +106,17 @@ jobs:
       with:
         gradle-version: 8.9
 
+    - name: Create CI signing key
+      shell: bash
+      run: |
+        keytool -genkeypair -v \
+          -keystore "$RUNNER_TEMP/logpulsex-ci.jks" \
+          -storepass logpulsex-ci \
+          -alias logpulsex-ci \
+          -keypass logpulsex-ci \
+          -keyalg RSA -keysize 2048 -validity 1 \
+          -dname "CN=LogPulseX CI, O=LogPulseX, C=US"
+
     - name: Build and test Android app
       uses: reactivecircus/android-emulator-runner@v2
       with:
@@ -115,7 +126,7 @@ jobs:
         force-avd-creation: true
         emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
         disable-animations: true
-        script: gradle -p mobile/android -PtestBuildType=${{ matrix.build_type }} :app:assemble${{ matrix.build_type }} :app:connected${{ matrix.build_type }}AndroidTest --stacktrace
+        script: gradle -p mobile/android -PtestBuildType=${{ matrix.build_type }} -PciKeystore="$RUNNER_TEMP/logpulsex-ci.jks" -PciKeystorePassword=logpulsex-ci -PciKeyAlias=logpulsex-ci -PciKeyPassword=logpulsex-ci :app:assemble${{ matrix.build_type }} :app:connected${{ matrix.build_type }}AndroidTest --stacktrace
 
     - name: Upload Android APK
       uses: actions/upload-artifact@v4

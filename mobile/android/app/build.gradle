@@ -22,9 +22,25 @@ android {
         cmake { path 'src/main/cpp/CMakeLists.txt' }
     }
 
+    if (project.hasProperty('ciKeystore')) {
+        signingConfigs {
+            ci {
+                storeFile file(project.property('ciKeystore'))
+                storePassword project.property('ciKeystorePassword')
+                keyAlias project.property('ciKeyAlias')
+                keyPassword project.property('ciKeyPassword')
+            }
+        }
+    }
+
     buildTypes {
         debug { debuggable true }
-        release { minifyEnabled false }
+        release {
+            minifyEnabled false
+            if (project.hasProperty('ciKeystore')) {
+                signingConfig signingConfigs.ci
+            }
+        }
     }
 }
 
